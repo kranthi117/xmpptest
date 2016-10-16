@@ -10,6 +10,7 @@ import android.support.v7.app.AppCompatActivity;
 import android.support.v7.widget.LinearLayoutManager;
 import android.support.v7.widget.RecyclerView;
 import android.util.Log;
+import android.view.View;
 
 public class MainActivity extends AppCompatActivity {
 
@@ -36,6 +37,18 @@ public class MainActivity extends AppCompatActivity {
         mAdapter = new ContactsAdapter();
         rv.setAdapter(mAdapter);
         rv.setLayoutManager(new LinearLayoutManager(this));
+
+        findViewById(R.id.logout).setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                Intent serviceIntent = new Intent(MainActivity.this, ChatService.class);
+                serviceIntent.putExtra("host", "13.78.120.174");
+                serviceIntent.putExtra("port", 443);
+                serviceIntent.putExtra("user", "sai@13.78.120.174");
+                serviceIntent.putExtra("password", "sai");
+                stopService(serviceIntent);
+            }
+        });
     }
 
     private BroadcastReceiver mReceiver = new BroadcastReceiver() {

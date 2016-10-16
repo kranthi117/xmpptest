@@ -18,12 +18,15 @@ import org.jivesoftware.smack.ConnectionListener;
 import org.jivesoftware.smack.ReconnectionManager;
 import org.jivesoftware.smack.SASLAuthentication;
 import org.jivesoftware.smack.SmackException;
+import org.jivesoftware.smack.StanzaListener;
 import org.jivesoftware.smack.XMPPConnection;
 import org.jivesoftware.smack.XMPPException;
 import org.jivesoftware.smack.chat.Chat;
 import org.jivesoftware.smack.chat.ChatManager;
 import org.jivesoftware.smack.chat.ChatMessageListener;
+import org.jivesoftware.smack.filter.StanzaFilter;
 import org.jivesoftware.smack.packet.Message;
+import org.jivesoftware.smack.packet.Stanza;
 import org.jivesoftware.smack.sasl.provided.SASLPlainMechanism;
 import org.jivesoftware.smack.tcp.XMPPTCPConnection;
 import org.jivesoftware.smack.tcp.XMPPTCPConnectionConfiguration;
@@ -32,7 +35,7 @@ import java.io.IOException;
 import java.lang.ref.WeakReference;
 import java.util.HashMap;
 
-public class ChatService extends Service implements ConnectionListener {
+public class ChatService extends Service implements ConnectionListener, ChatMessageListener {
     private static final String TAG = ChatService.class.getSimpleName();
     HashMap<String, WeakReference<ChatActivity>> activities = new HashMap<>();
     HashMap<String, Chat> chats = new HashMap<>();
@@ -62,9 +65,23 @@ public class ChatService extends Service implements ConnectionListener {
                 SASLAuthentication.unregisterSASLMechanism("org.jivesoftware.smack.sasl.provided.SASLDigestMD5Mechanism");
                 SASLAuthentication.registerSASLMechanism(new SASLPlainMechanism());
                 config.setSecurityMode(ConnectionConfiguration.SecurityMode.disabled);
+                config.setSendPresence(true);
                 mConnection = new XMPPTCPConnection(config.build());
                 mConnection.setUseStreamManagement(true);
                 mConnection.addConnectionListener(this);
+                mConnection.addAsyncStanzaListener(new StanzaListener() {
+                    @Override
+                    public void processPacket(Stanza packet) throws SmackException.NotConnectedException {
+                        if (packet instanceof Message) {
+                            processMessage(packet.getTo(), (Message) packet);
+                        }
+                    }
+                }, new StanzaFilter() {
+                    @Override
+                    public boolean accept(Stanza stanza) {
+                        return true;
+                    }
+                });
                 ReconnectionManager.getInstanceFor(mConnection).enableAutomaticReconnection();
                 Log.e(TAG, "onStartCommand: built connection obj");
             }
@@ -73,8 +90,8 @@ public class ChatService extends Service implements ConnectionListener {
                 public void run() {
                     try {
                         Log.e(TAG, "run: attempting login");
-                        Log.e(TAG, "run: " + user );
-                        Log.e(TAG, "run: " + password );
+                        Log.e(TAG, "run: " + user);
+                        Log.e(TAG, "run: " + password);
                         mConnection.connect().login();
                     } catch (SmackException | IOException | XMPPException e) {
                         e.printStackTrace();
@@ -94,7 +111,7 @@ public class ChatService extends Service implements ConnectionListener {
 
     public void startChat(String jid, ChatActivity chatActivity) {
         Chat chat = ChatManager.getInstanceFor(mConnection)
-                .createChat(jid, new MessageListener());
+                .createChat(jid, this);
         activities.put(jid, new WeakReference<>(chatActivity));
         chats.put(jid, chat);
     }
@@ -147,32 +164,25 @@ public class ChatService extends Service implements ConnectionListener {
 
     }
 
-    public class MessageListener implements ChatMessageListener {
+    @Override
+    public void processMessage(Chat chat, Message message) {
+        String jid = chat.getParticipant();
+        processMessage(jid, message);
+    }
 
-        @Override
-        public void processMessage(Chat chat, final Message message) {
-            String jid = chat.getParticipant();
-            Log.e(TAG, "processMessage: " + message.getBody());
-            // TODO save the message in database
-            WeakReference<ChatActivity> activityWeakReference = activities.get(jid);
-            if (activityWeakReference != null) {
-                final ChatActivity activity = activityWeakReference.get();
-                if (activity != null && activity.isVisible) {
-                    new Handler(Looper.getMainLooper()).post(new Runnable() {
-                        @Override
-                        public void run() {
-                            activity.receiveMessage(message);
-                        }
-                    });
-                } else {
-                    NotificationCompat.Builder mBuilder =
-                            new NotificationCompat.Builder(ChatService.this)
-                                    .setSmallIcon(R.drawable.ic_send_white_24dp)
-                                    .setContentTitle("My notification")
-                                    .setContentText(message.getBody());
-                    NotificationManager notificationService = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
-                    notificationService.notify(001, mBuilder.build());
-                }
+    public void processMessage(String jid, final Message message) {
+        Log.e(TAG, "processMessage: " + message.getBody());
+        // TODO save the message in database
+        WeakReference<ChatActivity> activityWeakReference = activities.get(jid);
+        if (activityWeakReference != null) {
+            final ChatActivity activity = activityWeakReference.get();
+            if (activity != null && activity.isVisible) {
+                new Handler(Looper.getMainLooper()).post(new Runnable() {
+                    @Override
+                    public void run() {
+                        activity.receiveMessage(message);
+                    }
+                });
             } else {
                 NotificationCompat.Builder mBuilder =
                         new NotificationCompat.Builder(ChatService.this)
@@ -182,12 +192,28 @@ public class ChatService extends Service implements ConnectionListener {
                 NotificationManager notificationService = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
                 notificationService.notify(001, mBuilder.build());
             }
+        } else {
+            NotificationCompat.Builder mBuilder =
+                    new NotificationCompat.Builder(ChatService.this)
+                            .setSmallIcon(R.drawable.ic_send_white_24dp)
+                            .setContentTitle("My notification")
+                            .setContentText(message.getBody());
+            NotificationManager notificationService = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+            notificationService.notify(001, mBuilder.build());
         }
     }
 
     public class LocalBinder extends Binder {
         public ChatService getServiceInstance() {
             return ChatService.this;
+        }
+    }
+
+    @Override
+    public void onDestroy() {
+        super.onDestroy();
+        if (mConnection != null && mConnection.isConnected()) {
+            mConnection.disconnect();
         }
     }
 }
